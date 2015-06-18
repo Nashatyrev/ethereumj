@@ -5,8 +5,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
-import io.netty.util.concurrent.Future;
-import io.netty.util.concurrent.SucceededFuture;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -143,18 +141,18 @@ public class Manifest {
 
     public final static String MANIFEST_MIME_TYPE = "application/bzz-manifest+json";
 
-    private DPA dpa;
+    private DPATmp dpa;
     private final StringTrie<ManifestEntry> trie;
 
     /**
      * Constructs the Manifest instance with backing DPA storage
      * @param dpa
      */
-    public Manifest(DPA dpa) {
+    public Manifest(DPATmp dpa) {
         this(dpa, new ManifestEntry(null, ""));
     }
 
-    private Manifest(DPA dpa, ManifestEntry root) {
+    private Manifest(DPATmp dpa, ManifestEntry root) {
         this.dpa = dpa;
         trie = new StringTrie<ManifestEntry>(root.setThisMF(this)) {};
     }
@@ -191,7 +189,7 @@ public class Manifest {
     /**
      * Loads the manifest with the specified hashKey from the DPA storage
      */
-    public static Manifest loadManifest(DPA dpa, String hashKey) {
+    public static Manifest loadManifest(DPATmp dpa, String hashKey) {
         ManifestRoot manifestRoot = load(dpa, hashKey);
 
         Manifest ret = new Manifest(dpa);
@@ -201,7 +199,7 @@ public class Manifest {
         return ret;
     }
 
-    private static Manifest.ManifestRoot load(DPA dpa, String hashKey) {
+    private static Manifest.ManifestRoot load(DPATmp dpa, String hashKey) {
         try {
             ByteBuf bb = dpa.read(hashKey);
             ObjectMapper om = new ObjectMapper();
@@ -231,7 +229,7 @@ public class Manifest {
     }
 
 
-    private String serialize(DPA dpa, ManifestEntry manifest) {
+    private String serialize(DPATmp dpa, ManifestEntry manifest) {
         try {
             ObjectMapper om = new ObjectMapper();
 

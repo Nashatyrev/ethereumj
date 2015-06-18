@@ -1,13 +1,15 @@
 package org.ethereum.net.swarm;
 
-import io.netty.buffer.ByteBuf;
-
 /**
- * Distributed Preimage Archive
+ * Created by Admin on 18.06.2015.
  */
 public abstract class DPA {
 
-    public abstract ByteBuf read(String hash);
+    Chunker chunker;
 
-    public abstract String /*Hash*/ store(ByteBuf data);
+    ChunkStore chunkStore;
+
+    public abstract SectionReader retrieve(Key key);
+
+    public abstract void store(Key key, SectionReader reader);
 }
