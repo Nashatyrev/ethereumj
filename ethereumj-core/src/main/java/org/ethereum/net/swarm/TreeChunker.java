@@ -1,6 +1,7 @@
 package org.ethereum.net.swarm;
 
-import io.netty.buffer.ByteBuf;
+import com.google.common.base.Joiner;
+import org.ethereum.util.ByteUtil;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -8,6 +9,9 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.Collection;
+
+import static java.lang.Math.max;
+import static java.lang.Math.min;
 
 /**
  * The distributed storage implemented in this package requires fix sized chunks of content
@@ -49,7 +53,7 @@ Unfortunately the hashing itself does use extra copies and allocation though sin
 
 public class TreeChunker implements Chunker {
 
-    private static final MessageDigest DEFAULT_HASHER;
+    public static final MessageDigest DEFAULT_HASHER;
     private static final int DEFAULT_BRANCHES = 128;
 
     static {
@@ -60,6 +64,92 @@ public class TreeChunker implements Chunker {
         }
     }
 
+    public class TreeChunk extends Chunk {
+        private static final int DATA_OFFSET = 8;
+
+        public TreeChunk(int dataSize) {
+            super(null, new byte[DATA_OFFSET + dataSize]);
+            setSubtreeSize(dataSize);
+        }
+
+        public TreeChunk(Chunk chunk) {
+            super(chunk.getKey(), chunk.getData());
+        }
+
+        public void setSubtreeSize(long size) {
+            ByteBuffer.wrap(getData()).order(ByteOrder.LITTLE_ENDIAN).putLong(0, size);
+        }
+
+        public long getSubtreeSize() {
+            return getSize();
+        }
+
+        public int getDataOffset() {
+            return DATA_OFFSET;
+        }
+
+        public Key getKey() {
+            if (key == null) {
+                key = new Key(hasher.digest(getData()));
+            }
+            return key;
+        }
+
+        @Override
+        public String toString() {
+            String dataString = ByteUtil.toHexString(
+                    Arrays.copyOfRange(getData(), getDataOffset(), getDataOffset() + 16)) + "...";
+            return "TreeChunk[" + getSize() + ", " + getKey() + ", " + dataString + "]";
+        }
+    }
+
+    public class HashesChunk extends TreeChunk {
+
+        public HashesChunk(long subtreeSize) {
+            super(branches * hashSize);
+            setSubtreeSize(subtreeSize);
+        }
+
+        public HashesChunk(Chunk chunk) {
+            super(chunk);
+        }
+
+        public int getKeyCount() {
+            return branches;
+        }
+
+        public Key getKey(int idx) {
+            int off = getDataOffset() + idx * hashSize;
+            return new Key(Arrays.copyOfRange(getData(), off, off + hashSize));
+        }
+
+        public void setKey(int idx, Key key) {
+            int off = getDataOffset() + idx * hashSize;
+            System.arraycopy(key.getBytes(), 0, getData(), off, hashSize);
+        }
+
+        @Override
+        public String toString() {
+            String hashes = "{";
+            for (int i = 0; i < getKeyCount(); i++) {
+                hashes += (i == 0 ? "" : ", ") + getKey(i);
+            }
+            hashes += "}";
+            return "HashesChunk[" + getSize() + ", " + getKey() + ", " + hashes + "]";
+        }
+    }
+
+    private class TreeSize {
+        int depth;
+        long treeSize;
+
+        public TreeSize(long dataSize) {
+            treeSize = chunkSize;
+            for (; treeSize < dataSize; treeSize *= branches) {
+                depth++;
+            }
+        }
+    }
 
     private int branches;
     private MessageDigest hasher;
@@ -80,24 +170,14 @@ public class TreeChunker implements Chunker {
     }
 
     @Override
-    public void split(Key key, SectionReader sectionReader, Collection<Chunk> consumer) {
-        int depth = 0;
-        long treeSize = chunkSize;
-        long size = sectionReader.getSize();
-
-        // takes lowest depth such that chunksize*HashCount^(depth+1) > size
-        // power series, will find the order of magnitude of the data size in base hashCount or numbers of levels of branching in the resulting tree.
-        for (; treeSize < size; treeSize *= branches) {
-            depth++;
-        }
-
-        splitImpl(depth, treeSize, sectionReader, consumer);
+    public Key split(SectionReader sectionReader, Collection<Chunk> consumer) {
+        TreeSize ts = new TreeSize(sectionReader.getSize());
+        return splitImpl(ts.depth, ts.treeSize/branches, sectionReader, consumer);
     }
 
     private Key splitImpl(int depth, long treeSize, SectionReader data, Collection<Chunk> consumer) {
         long size = data.getSize();
-        Chunk newChunk;
-        Key hash;
+        TreeChunk newChunk;
 
         while (depth > 0 && size < treeSize) {
             treeSize /= branches;
@@ -105,22 +185,18 @@ public class TreeChunker implements Chunker {
         }
 
         if (depth == 0) {
-            // leaf nodes -> content chunks
-            byte []chunkData = new byte[(int) (data.getSize() + 8)];
-            ByteBuffer.wrap(chunkData).order(ByteOrder.LITTLE_ENDIAN).putLong(0, size);
-            data.read(chunkData, 8);
-            hash = new Key(hasher.digest(chunkData));
-            newChunk = new Chunk(hash, chunkData, size);
+            newChunk = new TreeChunk((int) size); // safe to cast since leaf chunk size < 2Gb
+            data.read(newChunk.getData(), newChunk.getDataOffset());
         } else {
             // intermediate chunk containing child nodes hashes
             int branchCnt = (int) ((size + treeSize - 1) / treeSize);
 
-            byte[] chunk = new byte[(int) (branchCnt * hashSize + 8)];
+            HashesChunk hChunk = new HashesChunk(size);
+
             long pos = 0;
-
-            ByteBuffer.wrap(chunk).order(ByteOrder.LITTLE_ENDIAN).putLong(0, size);
-
             long secSize;
+
+            // TODO the loop can be parallelized
             for (int i = 0; i < branchCnt; i++) {
                 // the last item can have shorter data
                 if (size-pos < treeSize) {
@@ -129,35 +205,102 @@ public class TreeChunker implements Chunker {
                     secSize = treeSize;
                 }
                 // take the section of the data corresponding encoded in the subTree
-                SectionReader subTreeData = data.slice((int)pos, (int) (pos + secSize));
+                SectionReader subTreeData = new SlicedReader(data, pos, secSize);
                 // the hash of that data
-//                Key subTreeKey = new Key(Arrays.copyOfRange(chunk, 8 + i * hashSize, 8 + (i + 1) * hashSize));
-
                 Key subTreeKey = splitImpl(depth-1, treeSize/branches, subTreeData, consumer);
 
-                System.arraycopy(subTreeKey.getBytes(), 0, chunk, 8 + i * hashSize, hashSize);
+                hChunk.setKey(i, subTreeKey);
 
                 pos += treeSize;
             }
             // now we got the hashes in the chunk, then hash the chunk
-
-            hash = new Key(hasher.digest(chunk));
-            newChunk = new Chunk(hash, chunk, size);
+            newChunk = hChunk;
         }
 
         consumer.add(newChunk);
         // report hash of this chunk one level up (keys corresponds to the proper subslice of the parent chunk)x
-        return hash;
+        return newChunk.getKey();
 
     }
 
     @Override
-    public SectionReader join(Collection<Chunk> chunks) {
-        return null;
+//    public SectionReader join(Collection<Chunk> chunks) {
+    public SectionReader join(ChunkStore chunkStore, Key key) {
+        return new LazyChunkReader(chunkStore, key);
     }
 
     @Override
     public long keySize() {
         return hashSize;
+    }
+
+    private class LazyChunkReader implements SectionReader {
+        Key key;
+        ChunkStore chunkStore;
+        long size;
+
+        Chunk root;
+
+        public LazyChunkReader(ChunkStore chunkStore, Key key) {
+            this.chunkStore = chunkStore;
+            this.key = key;
+            root = chunkStore.get(key);
+            this.size = root.getSize();
+        }
+
+        @Override
+        public int readAt(byte[] dest, int destOff, long readerOffset) {
+            int size = dest.length - destOff;
+            TreeSize ts = new TreeSize(root.getSize());
+            return readImpl(dest, destOff, root, ts.treeSize, 0, readerOffset,
+                    readerOffset + min(size, root.getSize() - readerOffset));
+        }
+
+        private int readImpl(byte[] dest, int destOff, Chunk chunk, long chunkWidth, long chunkStart,
+                              long readStart, long readEnd) {
+            long chunkReadStart = max(readStart - chunkStart, 0);
+            long chunkReadEnd = min(chunkWidth, readEnd - chunkStart);
+
+            int ret = 0;
+            if (chunkWidth > chunkSize) {
+                long subChunkWidth = chunkWidth / branches;
+                if (chunkReadStart >= chunkWidth || chunkReadEnd <= 0) {
+                    throw new RuntimeException("Not expected.");
+                }
+
+                int startSubChunk = (int) (chunkReadStart / subChunkWidth);
+                int lastSubChunk = (int) ((chunkReadEnd - 1) / subChunkWidth);
+
+                // TODO the loop can be parallelized
+                for (int i = startSubChunk; i <= lastSubChunk; i++) {
+                    HashesChunk hChunk = new HashesChunk(chunk);
+                    Chunk subChunk = chunkStore.get(hChunk.getKey(i));
+                    ret += readImpl(dest, (int) (destOff + (i - startSubChunk) * subChunkWidth),
+                            subChunk, subChunkWidth, chunkStart + i * subChunkWidth, readStart, readEnd);
+                }
+            } else {
+                TreeChunk dataChunk = new TreeChunk(chunk);
+                ret = (int) (chunkReadEnd - chunkReadStart);
+                System.arraycopy(dataChunk.getData(), (int) (dataChunk.getDataOffset() + chunkReadStart),
+                        dest, destOff, ret);
+            }
+            return ret;
+        }
+
+        @Override
+        public long seek(long offset, int whence) {
+            throw new RuntimeException("Not implemented");
+        }
+
+
+        @Override
+        public long getSize() {
+            return size;
+        }
+
+        @Override
+        public int read(byte[] dest, int destOff) {
+            return readAt(dest, destOff, 0);
+        }
     }
 }

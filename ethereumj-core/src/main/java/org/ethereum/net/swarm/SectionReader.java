@@ -10,6 +10,4 @@ public interface SectionReader extends Bounded {
     int read(byte[] dest, int destOff);
 
     int readAt(byte[] dest, int destOff, long readerOffset);
-
-    SectionReader slice(int from, int to);
 }

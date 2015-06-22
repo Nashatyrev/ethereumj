@@ -28,9 +28,4 @@ public class ByteSliceReader implements SectionReader, Sliced {
     public int readAt(byte[] dest, int destOff, long readerOffset) {
         return 0;
     }
-
-    @Override
-    public SectionReader slice(int from, int to) {
-        return null;
-    }
 }

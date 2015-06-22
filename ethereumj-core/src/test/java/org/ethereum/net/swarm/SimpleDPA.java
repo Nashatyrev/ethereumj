@@ -10,7 +10,7 @@ import java.util.UUID;
 /**
  * Created by Admin on 11.06.2015.
  */
-public class SimpleDPA extends DPA {
+public class SimpleDPA extends DPATmp {
     Map<String, ByteBuf> store = new HashMap<>();
 
     @Override

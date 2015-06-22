@@ -33,7 +33,7 @@ public interface Chunker {
          The caller gets returned an error channel, if an error is encountered during splitting, it is fed to errC error channel.
        A closed error signals process completion at which point the key can be considered final if there were no errors.
     */
-    void split(Key key, SectionReader sectionReader, Collection<Chunk> consumer);
+    Key split(SectionReader sectionReader, Collection<Chunk> consumer);
 
 	/*
 		Join reconstructs original content based on a root key.
@@ -42,7 +42,8 @@ public interface Chunker {
 		If an error is encountered during joining, it appears as a reader error.
 		The SectionReader provides on-demand fetching of chunks.
 	*/
-    SectionReader join(Collection<Chunk> chunks);
+//    SectionReader join(Collection<Chunk> chunks);
+    SectionReader join(ChunkStore chunkStore, Key key);
 
     /**
      * @return the key length

@@ -33,9 +33,4 @@ public class ChunkReader implements SectionReader, Sliced {
     public byte[] slice(long from, long to) {
         return new byte[0];
     }
-
-    @Override
-    public SectionReader slice(int from, int to) {
-        return null;
-    }
 }

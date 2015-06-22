@@ -19,7 +19,7 @@ public class ManifestTest {
             "  {\"path\":\"a/bb/c\"}\n" +
             "]}";
 
-    static DPA dpa = new SimpleDPA();
+    static DPATmp dpa = new SimpleDPA();
 
 
     @Test

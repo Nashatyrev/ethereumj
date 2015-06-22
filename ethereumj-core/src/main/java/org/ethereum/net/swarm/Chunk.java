@@ -1,5 +1,8 @@
 package org.ethereum.net.swarm;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+
 // Chunk serves also serves as a request object passed to ChunkStores
 // in case it is a retrieval request, Data is nil and Size is 0
 // Note that Size is not the size of the data chunk, which is Data.Size() see SectionReader
@@ -8,7 +11,7 @@ package org.ethereum.net.swarm;
 public class Chunk {
     Key    key;            // always
     byte[] data;         // nil if request, to be supplied by dpa
-    long   size;          // size of the data covered by the subtree encoded in this chunk
+//    long   size;          // size of the data covered by the subtree encoded in this chunk
 //    C        chan bool      // to signal data delivery by the dpa
 //    req      *requestStatus //
 //    wg       *sync.WaitGroup
@@ -16,9 +19,21 @@ public class Chunk {
 //    source   *peer
 
 
-    public Chunk(Key key, byte[] data, long size) {
+    public Chunk(Key key, byte[] data) {
         this.key = key;
         this.data = data;
-        this.size = size;
+//        this.size = size;
+    }
+
+    public Key getKey() {
+        return key;
+    }
+
+    public byte[] getData() {
+        return data;
+    }
+
+    public long getSize() {
+        return ByteBuffer.wrap(getData()).order(ByteOrder.LITTLE_ENDIAN).getLong(0);
     }
 }
